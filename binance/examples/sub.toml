@@ -1,0 +1,6 @@
+output_dir = "data"
+sub_list = [
+    ["btcusdt", "1m"],
+    ["ethusdt", "1m"],
+    ["solusdt", "1m"],
+]
