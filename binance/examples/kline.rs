@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let pair_list = config.sub_list;
-    let (tx, rx) = crossbeam::channel::bounded(1);
+    let (tx, rx) = crossbeam::channel::bounded(pair_list.len());
     tokio::spawn(async move { subscribe_binance(pair_list, tx).await });
 
     let writer = create_writer(writer_type)?;
