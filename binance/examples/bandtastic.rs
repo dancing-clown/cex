@@ -1,6 +1,8 @@
 use cex_core::{writer::{create_writer, FileWriterConfig, WriterType}, SimpleKLine};
 use binance::subscribe_binance;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tracing::{error, info};
 use std::{path::PathBuf, fs};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -147,6 +149,7 @@ impl BandtasticStrategy {
         
          // Create a DataItem that implements all required traits
         let data_item = DataItem::builder()
+            .open(open)
             .high(high)
             .low(low)
             .close(close)
@@ -377,7 +380,7 @@ async fn main() -> anyhow::Result<()> {
     let data_dir = PathBuf::from(config.output_dir);
     fs::create_dir_all(&data_dir)?;
 
-    let boardcast = async |signal: Signal| -> anyhow::Result<()> {
+    let boardcast = async |signal: serde_json::Value| -> anyhow::Result<()> {
         let client = reqwest::Client::new();
         for url in config.webhook_url.clone() {
             let res = client.post(url.clone())
@@ -390,30 +393,39 @@ async fn main() -> anyhow::Result<()> {
     };
 
 
-    // 配置文件写入器
-    let writer_type = WriterType::File(FileWriterConfig {
-        base_path: data_dir,
-        rotation_interval: 8 * 3600, // 8小时轮转一次
-    });
-
     let pair_list = config.sub_list;
-    let (tx, rx) = crossbeam::channel::bounded(pair_list.len());
+    let p_len: usize = pair_list.len();
+    let (tx, rx) = crossbeam::channel::bounded(p_len);
     tokio::spawn(async move { subscribe_binance(pair_list, tx).await });
 
-    let writer = create_writer(writer_type)?;
-    info!("开始写入K线数据");
-    info!("开始计算策略");
-    while let Ok(kline) = rx.recv() {
-        if let Some(signal) = strategy.next(kline.clone()) {
-            info!("Signal generated: {:?}", signal);
-            if let Err(e)  = boardcast(signal).await {
-                error!("Failed to boardcast signal: {:?}", e);
+    let (sg_tx, sg_rx) = crossbeam::channel::bounded(p_len);
+
+
+    std::thread::spawn(move || {
+        info!("开始计算策略");
+        while let Ok(kline) = rx.recv() {
+            if let Some(signal) = strategy.next(kline.clone()) {
+                sg_tx.send((kline, signal)).unwrap();
             }
         }
-        writer.write(&kline).await?;
-        // 不需要flush
-        writer.flush().await?;
-        info!("写入到文件: {:?}", kline);
+    });
+
+    while let Ok((kline, signal)) = sg_rx.recv() {
+        let now_ts = Utc::now().timestamp_millis();
+        let dt = chrono::DateTime::from_timestamp_millis(now_ts)
+            .unwrap()
+            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+
+        let signal = json!({
+            "策略名": "Bandtastic Strategy",
+            "标的名": kline.symbol,
+            "signal": signal,
+            "当前时间": dt.format("%Y%m%d-%H:%M.%S").to_string(),
+        });
+        info!("Signal generated: {:?}", signal);
+        if let Err(e)  = boardcast(signal).await {
+            error!("Failed to boardcast signal: {:?}", e);
+        }
     }
 
     Ok(())
