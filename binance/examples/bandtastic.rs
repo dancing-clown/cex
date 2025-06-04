@@ -404,12 +404,10 @@ async fn main() -> anyhow::Result<()> {
     info!("开始写入K线数据");
     info!("开始计算策略");
     while let Ok(kline) = rx.recv() {
-        if kline.symbol == "rayusdt" {
-            if let Some(signal) = strategy.next(kline.clone()) {
-                info!("Signal generated: {:?}", signal);
-                if let Err(e)  = boardcast(signal).await {
-                    error!("Failed to boardcast signal: {:?}", e);
-                }
+        if let Some(signal) = strategy.next(kline.clone()) {
+            info!("Signal generated: {:?}", signal);
+            if let Err(e)  = boardcast(signal).await {
+                error!("Failed to boardcast signal: {:?}", e);
             }
         }
         writer.write(&kline).await?;
