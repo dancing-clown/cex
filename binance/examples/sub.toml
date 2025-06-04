@@ -1,4 +1,7 @@
 output_dir = "data"
+webhook_url = [
+    "http://127.0.0.1:8000/alert/webhook"
+]
 sub_list = [
     ["btcusdt", "1m"],
     ["ethusdt", "1m"],

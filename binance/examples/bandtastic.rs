@@ -1,9 +1,10 @@
-use cex_core::writer::{create_writer, FileWriterConfig, WriterType};
+use cex_core::{writer::{create_writer, FileWriterConfig, WriterType}, SimpleKLine};
 use binance::subscribe_binance;
-use serde::Deserialize;
-use tracing::info;
+use serde::{Deserialize, Serialize};
+use tracing::{error, info};
 use std::{path::PathBuf, fs};
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_appender;
 use ta::{
     indicators::{BollingerBands, ExponentialMovingAverage, MoneyFlowIndex, RelativeStrengthIndex},
     Next,
@@ -140,7 +141,8 @@ impl BandtasticStrategy {
         }
     }
     
-    pub fn next(&mut self, open: f64, high: f64, low: f64, close: f64, volume: f64) -> Option<Signal> {
+    pub fn next(&mut self, kline: SimpleKLine) -> Option<Signal> {
+        let (open, high, low, close, volume) = (kline.open, kline.high, kline.low, kline.close, kline.volume);
         self.bar_index += 1;
         
          // Create a DataItem that implements all required traits
@@ -301,7 +303,7 @@ impl BandtasticStrategy {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 enum Signal {
     Enter {
         direction: Direction,
@@ -313,13 +315,13 @@ enum Signal {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 enum Direction {
     Long,
     Short,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 enum ExitReason {
     SellSignal,
     StopLoss,
@@ -331,14 +333,23 @@ enum ExitReason {
 #[derive(Debug, Deserialize)]
 struct Config {
     output_dir: String,
+    webhook_url: Vec<String>,
     sub_list: Vec<(String, String)>,
 }
 
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 初始化日志
+    let file_appender = tracing_appender::rolling::RollingFileAppender::new(
+        tracing_appender::rolling::Rotation::DAILY,
+        "logs",
+        "bandtastic.log",
+    );
+
     tracing_subscriber::fmt()
+        .with_writer(file_appender)
         .with_span_events(FmtSpan::CLOSE)
+        .with_ansi(false)
         .init();
 
     let config = toml::from_str::<Config>(&fs::read_to_string("sub.toml")?)?;
@@ -366,6 +377,18 @@ async fn main() -> anyhow::Result<()> {
     let data_dir = PathBuf::from(config.output_dir);
     fs::create_dir_all(&data_dir)?;
 
+    let boardcast = async |signal: Signal| -> anyhow::Result<()> {
+        let client = reqwest::Client::new();
+        for url in config.webhook_url.clone() {
+            let res = client.post(url.clone())
+                .json(&signal)
+                .send()
+                .await?;
+            info!("Boardcast to {}: {:?}", url, res);
+        }
+        Ok(())
+    };
+
 
     // 配置文件写入器
     let writer_type = WriterType::File(FileWriterConfig {
@@ -382,9 +405,11 @@ async fn main() -> anyhow::Result<()> {
     info!("开始计算策略");
     while let Ok(kline) = rx.recv() {
         if kline.symbol == "rayusdt" {
-            if let Some(signal) = strategy.next(kline.open, kline.high, kline.low, kline.close, kline.volume) {
+            if let Some(signal) = strategy.next(kline.clone()) {
                 info!("Signal generated: {:?}", signal);
-                // 则调用https 的post 发送到对应的api进行告警
+                if let Err(e)  = boardcast(signal).await {
+                    error!("Failed to boardcast signal: {:?}", e);
+                }
             }
         }
         writer.write(&kline).await?;
