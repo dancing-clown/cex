@@ -410,6 +410,12 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    boardcast(json!({
+        "策略名": "Bandtastic Strategy",
+        "消息": "开始计算策略",
+        "当前时间": Utc::now().timestamp_millis(),
+    })).await?;
+
     while let Ok((kline, signal)) = sg_rx.recv() {
         let now_ts = Utc::now().timestamp_millis();
         let dt = chrono::DateTime::from_timestamp_millis(now_ts)
