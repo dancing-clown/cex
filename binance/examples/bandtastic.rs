@@ -420,7 +420,8 @@ async fn main() -> anyhow::Result<()> {
 
     let (bd_tx, bd_rx) = crossbeam::channel::bounded(p_len);
 
-    let mut strategies = (0..p_len).map(|_| {strategy.clone()}).collect::<Vec<BandtasticStrategy>>();
+    // index 0 不存在, 需要多创建一个
+    let mut strategies = (0..p_len + 1).map(|_| {strategy.clone()}).collect::<Vec<BandtasticStrategy>>();
 
 
     let st_rx = rx.clone();
