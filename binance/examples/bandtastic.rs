@@ -1,4 +1,4 @@
-use cex_core::{writer::{create_writer, FileWriterConfig, WriterType}, SimpleKLine};
+use cex_core::{writer::{create_writer, FileWriterConfig, WriterType}, CexError, ChannelMsg, Ping, SimpleKLine};
 use binance::subscribe_binance;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,7 @@ use ta::{
 use ta::DataItem; // The struct that already implements these traits
 use std::collections::VecDeque;
 
+#[derive(Debug, Clone)]
 struct BandtasticStrategy {
     // Buy parameters
     buy_fast_ema_period: usize,
@@ -62,6 +63,7 @@ struct BandtasticStrategy {
     price_history: VecDeque<f64>,
 }
 
+#[derive(Debug, Clone)]
 struct Position {
     entry_price: f64,
     entry_bar_index: usize,
@@ -230,9 +232,11 @@ impl BandtasticStrategy {
                 if self.bars_since_entry >= bars_needed {
                     let target_price = position.entry_price * (1.0 + roi_percentage);
                     if close >= target_price {
+                        let now_ts = Utc::now().timestamp_millis();
                         signal = Some(Signal::Exit {
                             reason: ExitReason::Roi(*minutes, *roi_percentage),
                             price: close,
+                            ts_ms: now_ts,
                         });
                         break;
                     }
@@ -244,9 +248,11 @@ impl BandtasticStrategy {
         if let Some(position) = &self.position {
             let stop_loss_price = position.entry_price * (1.0 + self.stoploss);
             if close <= stop_loss_price {
+                let now_ts = Utc::now().timestamp_millis();
                 signal = Some(Signal::Exit {
                     reason: ExitReason::StopLoss,
                     price: close,
+                    ts_ms: now_ts,
                 });
             }
         }
@@ -261,9 +267,11 @@ impl BandtasticStrategy {
                 if let Some(highest_price) = self.price_history.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
                     let trail_price = highest_price - trail_offset;
                     if close <= trail_price {
+                        let now_ts = Utc::now().timestamp_millis();
                         signal = Some(Signal::Exit {
                             reason: ExitReason::TrailingStop,
                             price: close,
+                            ts_ms: now_ts,
                         });
                     }
                 }
@@ -272,31 +280,35 @@ impl BandtasticStrategy {
         
         // Generate entry signals only if we don't have a position
         if self.position.is_none() && buy_signal {
+            let now_ts = Utc::now().timestamp_millis();
             signal = Some(Signal::Enter {
                 direction: Direction::Long,
                 price: close,
+                ts_ms: now_ts,
             });
         }
         
         // Generate exit signal if we have a position and sell conditions are met
         if self.position.is_some() && sell_signal {
+            let now_ts = Utc::now().timestamp_millis();
             signal = Some(Signal::Exit {
                 reason: ExitReason::SellSignal,
                 price: close,
+                ts_ms: now_ts,
             });
         }
         
         // Update position based on signal
         if let Some(signal) = &signal {
             match signal {
-                Signal::Enter { direction, price } => {
+                Signal::Enter { direction, price, ts_ms } => {
                     self.position = Some(Position {
                         entry_price: *price,
                         entry_bar_index: self.bar_index,
                         size: 1.0, // Assuming full position size
                     });
                 },
-                Signal::Exit { .. } => {
+                Signal::Exit { reason, price, ts_ms } => {
                     self.position = None;
                 },
             }
@@ -311,10 +323,12 @@ enum Signal {
     Enter {
         direction: Direction,
         price: f64,
+        ts_ms: i64
     },
     Exit {
         reason: ExitReason,
         price: f64,
+        ts_ms: i64
     },
 }
 
@@ -340,6 +354,12 @@ struct Config {
     sub_list: Vec<(String, String)>,
 }
 
+enum BoardcastMsg {
+    Ping(Ping),
+    Signal(SimpleKLine, Signal),
+    Error(CexError),
+}
+
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -357,7 +377,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = toml::from_str::<Config>(&fs::read_to_string("sub.toml")?)?;
 
-    let mut strategy = BandtasticStrategy::new(
+    let strategy = BandtasticStrategy::new(
         20,  // buy_fast_ema_period
         40,  // buy_slow_ema_period
         50.0,  // buy_rsi_threshold
@@ -398,14 +418,27 @@ async fn main() -> anyhow::Result<()> {
     let (tx, rx) = crossbeam::channel::bounded(p_len);
     tokio::spawn(async move { subscribe_binance(pair_list, tx).await });
 
-    let (sg_tx, sg_rx) = crossbeam::channel::bounded(p_len);
+    let (bd_tx, bd_rx) = crossbeam::channel::bounded(p_len);
+
+    let mut strategies = (0..p_len).map(|_| {strategy.clone()}).collect::<Vec<BandtasticStrategy>>();
 
 
+    let st_rx = rx.clone();
     std::thread::spawn(move || {
         info!("开始计算策略");
-        while let Ok(kline) = rx.recv() {
-            if let Some(signal) = strategy.next(kline.clone()) {
-                sg_tx.send((kline, signal)).unwrap();
+        while let Ok(msg) = st_rx.recv() {
+            match msg {
+                ChannelMsg::Kline((index, kline)) => {
+                    if let Some(signal) = strategies[index].next(kline.clone()) {
+                        bd_tx.send(BoardcastMsg::Signal(kline, signal)).unwrap();
+                    }
+                }
+                ChannelMsg::Ping(ping) => {
+                    bd_tx.send(BoardcastMsg::Ping(ping)).unwrap();
+                },
+                ChannelMsg::Error(error) => {
+                    bd_tx.send(BoardcastMsg::Error(error)).unwrap();
+                },
             }
         }
     });
@@ -416,22 +449,56 @@ async fn main() -> anyhow::Result<()> {
         "当前时间": Utc::now().timestamp_millis(),
     })).await?;
 
-    while let Ok((kline, signal)) = sg_rx.recv() {
+    while let Ok(msg) = bd_rx.recv() {
         let now_ts = Utc::now().timestamp_millis();
         let dt = chrono::DateTime::from_timestamp_millis(now_ts)
             .unwrap()
             .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+        match msg {
+            BoardcastMsg::Signal(kline, signal) => {
+                let msg = json!({
+                    "策略名": "Bandtastic Strategy",
+                    "标的名": kline.symbol,
+                    "signal": signal,
+                    "当前时间": dt.format("%Y%m%d-%H:%M.%S").to_string(),
+                });
+                info!("Signal generated: {:?}", msg);
+                if let Err(e)  = boardcast(msg).await {
+                    error!("Failed to boardcast signal: {:?}", e);
+                }
+            },
+            BoardcastMsg::Ping(ping) => {
+                let msg = json!({
+                    "策略名": "Bandtastic Strategy",
+                    "ping": ping,
+                    "当前时间": dt.format("%Y%m%d-%H:%M.%S").to_string(),
+                });
+                if let Err(e)  = boardcast(msg).await {
+                    error!("Failed to boardcast signal: {:?}", e);
+                }
+            },
+            BoardcastMsg::Error(error) => {
+                error!("Error: {:?}", error);
+            }
+        };
+    }
 
-        let signal = json!({
-            "策略名": "Bandtastic Strategy",
-            "标的名": kline.symbol,
-            "signal": signal,
-            "当前时间": dt.format("%Y%m%d-%H:%M.%S").to_string(),
-        });
-        info!("Signal generated: {:?}", signal);
-        if let Err(e)  = boardcast(signal).await {
-            error!("Failed to boardcast signal: {:?}", e);
-        }
+    // 配置文件写入器
+    let writer_type = WriterType::File(FileWriterConfig {
+        base_path: data_dir,
+        rotation_interval: 8 * 3600, // 8小时轮转一次
+    });
+    
+    let writer = create_writer(writer_type)?;
+    info!("开始写入K线数据");
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            ChannelMsg::Kline(kline) => {
+                writer.write(&kline).await?;
+                writer.flush().await?;
+            },
+            _ => {}
+        };
     }
 
     Ok(())

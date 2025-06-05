@@ -1,4 +1,4 @@
-use cex_core::writer::{create_writer, FileWriterConfig, WriterType};
+use cex_core::{writer::{create_writer, FileWriterConfig, WriterType}, ChannelMsg};
 use binance::subscribe_binance;
 use serde::Deserialize;
 use tracing::info;
@@ -38,10 +38,15 @@ async fn main() -> anyhow::Result<()> {
 
     let writer = create_writer(writer_type)?;
     info!("开始写入K线数据");
-    while let Ok(kline) = rx.recv() {
-        writer.write(&kline).await?;
-        writer.flush().await?;
-        info!("写入到文件: {:?}", kline);
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            ChannelMsg::Kline(kline) => {
+                writer.write(&kline).await?;
+                writer.flush().await?;
+                info!("写入到文件: {:?}", kline);
+            }
+            _ => {}
+        };
     }
 
     Ok(())

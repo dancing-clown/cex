@@ -1,4 +1,6 @@
-use cex_core::SimpleKLine;
+use std::collections::BTreeMap;
+
+use cex_core::{ChannelMsg, Ping, SimpleKLine};
 
 use crossbeam::channel::Sender;
 
@@ -87,7 +89,7 @@ struct BNKline {
 
 /// (code, interval), sender
 /// ("btcusdt", "1m")
-pub async fn subscribe_binance(pair_list: Vec<(String, String)>, tx: Sender<SimpleKLine>) {
+pub async fn subscribe_binance(pair_list: Vec<(String, String)>, tx: Sender<ChannelMsg>) {
     info!("subscribe to binance: {:?}", pair_list);
     // let pair_list = pair_list.iter().map(|(symbol, interval)| (symbol.to_string(), interval.to_string())).collect::<Vec<(String, String)>>();
     loop { // 出错自动重连， binance 24h 会断开连接
@@ -97,7 +99,7 @@ pub async fn subscribe_binance(pair_list: Vec<(String, String)>, tx: Sender<Simp
     }
 }
 
-async fn connect_binance(pair_list: Vec<(String, String)>, tx: Sender<SimpleKLine>) -> anyhow::Result<()> {
+async fn connect_binance(pair_list: Vec<(String, String)>, tx: Sender<ChannelMsg>) -> anyhow::Result<()> {
     // 用组合流 stream
     let url = format!("wss://stream.binance.com:9443/stream");
     let (mut ws_stream, _) = connect_async(url).await?;
@@ -119,11 +121,13 @@ async fn connect_binance(pair_list: Vec<(String, String)>, tx: Sender<SimpleKLin
 
 async fn handle_websocket_stream<S>(
     mut ws_stream: WebSocketStream<S>,
-    tx: Sender<SimpleKLine>,
+    tx: Sender<ChannelMsg>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
+    let mut m = BTreeMap::new();
+    let mut cnt = 0usize;
     while let Some(message) = ws_stream.next().await {
         match message {
             Ok(Message::Text(text)) => match serde_json::from_str::<BNKStreamFrame>(&text) {
@@ -139,10 +143,19 @@ where
                         kline_data.kline.low,
                         kline_data.kline.volume
                     );
+                    let symbol = kline_data.symbol.clone();
+                    let index = match m.get(&symbol) {
+                        Some(v) => *v,
+                        None => {
+                            cnt += 1;
+                            m.insert(symbol, cnt);
+                            cnt
+                        },
+                    };
                     
                     // 只有当K线周期结束时才发送数据
                     if kline_data.kline.is_closed {
-                        if let Err(e) = tx.try_send(kline_data.into()) {
+                        if let Err(e) = tx.try_send(ChannelMsg::Kline((index, kline_data.into()))) {
                             error!("Failed to handle kline data: {}", e);
                         }
                     }
@@ -154,6 +167,9 @@ where
             Ok(Message::Ping(ping)) => {
                 info!("收到Ping消息");
                 ws_stream.send(Message::Pong(ping)).await?;
+                if let Err(e) = tx.try_send(ChannelMsg::Ping(Ping::new("binance".to_string(), Utc::now().timestamp_millis()))) {
+                    error!("Failed to send ping message: {}", e);
+                }
             }
             Err(e) => {
                 error!("Error receiving message: {}", e);

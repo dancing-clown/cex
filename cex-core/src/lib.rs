@@ -1,3 +1,4 @@
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -43,6 +44,30 @@ pub struct SimpleKLine {
     /// 交易笔数
     pub trades_count: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ping {
+    pub source: String,     // 来源
+    pub recv_ts_ms : i64,         // 交易所时间戳
+    pub remark: String,     // 备注
+}
+
+impl Ping {
+    pub fn new(source: String, ts: i64) -> Self {
+        Self {
+            source,
+            recv_ts_ms: ts,
+            remark: String::new(),
+        }
+    }
+}
+
+pub enum ChannelMsg {
+    Ping(Ping),
+    Kline((usize, SimpleKLine)),
+    Error(CexError),
+}
+
 
 impl SimpleKLine {
     /// 创建新的K线数据
