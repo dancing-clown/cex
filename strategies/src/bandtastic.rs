@@ -1,21 +1,18 @@
-use cex_core::{writer::{create_writer, FileWriterConfig, WriterType}, CexError, ChannelMsg, Ping, SimpleKLine};
-use binance::subscribe_binance;
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tracing::{error, info};
-use std::{path::PathBuf, fs};
-use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_appender;
 use ta::{
     indicators::{BollingerBands, ExponentialMovingAverage, MoneyFlowIndex, RelativeStrengthIndex},
     Next,
 };
 use ta::DataItem; // The struct that already implements these traits
 use std::collections::VecDeque;
+use cex_core::SimpleKLine;
+use cex_core::structure::Signal;
+use cex_core::structure::Position;
+use cex_core::structure::Direction;
+use cex_core::structure::ExitReason;
+use tracing::error;
 
-#[derive(Debug, Clone)]
-struct BandtasticStrategy {
+#[derive(Clone)]
+pub struct BandtasticStrategy {
     // Buy parameters
     buy_fast_ema_period: usize,
     buy_slow_ema_period: usize,
@@ -61,13 +58,6 @@ struct BandtasticStrategy {
     bars_since_entry: usize,
     bar_index: usize,
     price_history: VecDeque<f64>,
-}
-
-#[derive(Debug, Clone)]
-struct Position {
-    entry_price: f64,
-    entry_bar_index: usize,
-    size: f64,
 }
 
 impl BandtasticStrategy {
@@ -146,6 +136,10 @@ impl BandtasticStrategy {
     }
     
     pub fn next(&mut self, kline: SimpleKLine) -> Option<Signal> {
+        if kline.interval != "15m" {
+            error!("非法的K线间隔,请检查行情输入");
+            return None;
+        }
         let (open, high, low, close, volume) = (kline.open, kline.high, kline.low, kline.close, kline.volume);
         self.bar_index += 1;
         
@@ -230,13 +224,11 @@ impl BandtasticStrategy {
                 // Assuming 15 minutes per bar (adjust according to your timeframe)
                 let bars_needed = minutes / 15;
                 if self.bars_since_entry >= bars_needed {
-                    let target_price = position.entry_price * (1.0 + roi_percentage);
+                    let target_price = position.price * (1.0 + roi_percentage);
                     if close >= target_price {
-                        let now_ts = Utc::now().timestamp_millis();
                         signal = Some(Signal::Exit {
                             reason: ExitReason::Roi(*minutes, *roi_percentage),
                             price: close,
-                            ts_ms: now_ts,
                         });
                         break;
                     }
@@ -246,13 +238,11 @@ impl BandtasticStrategy {
         
         // Check stop loss
         if let Some(position) = &self.position {
-            let stop_loss_price = position.entry_price * (1.0 + self.stoploss);
+            let stop_loss_price = position.price * (1.0 + self.stoploss);
             if close <= stop_loss_price {
-                let now_ts = Utc::now().timestamp_millis();
                 signal = Some(Signal::Exit {
                     reason: ExitReason::StopLoss,
                     price: close,
-                    ts_ms: now_ts,
                 });
             }
         }
@@ -260,18 +250,16 @@ impl BandtasticStrategy {
         // Check trailing stop
         if self.trailing_stop && self.position.is_some() {
             let position = self.position.as_ref().unwrap();
-            let trail_offset = position.entry_price * self.trailing_stop_positive_offset;
-            let trail_activation = position.entry_price * (1.0 + self.trailing_stop_positive);
+            let trail_offset = position.price * self.trailing_stop_positive_offset;
+            let trail_activation = position.price * (1.0 + self.trailing_stop_positive);
             
             if !self.trailing_only_offset_is_reached || close > trail_activation {
                 if let Some(highest_price) = self.price_history.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
                     let trail_price = highest_price - trail_offset;
                     if close <= trail_price {
-                        let now_ts = Utc::now().timestamp_millis();
                         signal = Some(Signal::Exit {
                             reason: ExitReason::TrailingStop,
                             price: close,
-                            ts_ms: now_ts,
                         });
                     }
                 }
@@ -280,35 +268,31 @@ impl BandtasticStrategy {
         
         // Generate entry signals only if we don't have a position
         if self.position.is_none() && buy_signal {
-            let now_ts = Utc::now().timestamp_millis();
             signal = Some(Signal::Enter {
                 direction: Direction::Long,
                 price: close,
-                ts_ms: now_ts,
             });
         }
         
         // Generate exit signal if we have a position and sell conditions are met
         if self.position.is_some() && sell_signal {
-            let now_ts = Utc::now().timestamp_millis();
             signal = Some(Signal::Exit {
                 reason: ExitReason::SellSignal,
                 price: close,
-                ts_ms: now_ts,
             });
         }
         
         // Update position based on signal
         if let Some(signal) = &signal {
             match signal {
-                Signal::Enter { direction, price, ts_ms } => {
+                Signal::Enter { direction:_, price } => {
                     self.position = Some(Position {
-                        entry_price: *price,
+                        price: *price,
                         entry_bar_index: self.bar_index,
                         size: 1.0, // Assuming full position size
                     });
                 },
-                Signal::Exit { reason, price, ts_ms } => {
+                Signal::Exit { .. } => {
                     self.position = None;
                 },
             }
@@ -317,190 +301,3 @@ impl BandtasticStrategy {
         signal
     }
 }
-
-#[derive(Debug, Serialize, Deserialize)]
-enum Signal {
-    Enter {
-        direction: Direction,
-        price: f64,
-        ts_ms: i64
-    },
-    Exit {
-        reason: ExitReason,
-        price: f64,
-        ts_ms: i64
-    },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-enum Direction {
-    Long,
-    Short,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-enum ExitReason {
-    SellSignal,
-    StopLoss,
-    TrailingStop,
-    Roi(usize, f64), // minutes, percentage
-}
-
-// 配置
-#[derive(Debug, Deserialize)]
-struct Config {
-    output_dir: String,
-    webhook_url: Vec<String>,
-    sub_list: Vec<(String, String)>,
-}
-
-enum BoardcastMsg {
-    Ping(Ping),
-    Signal(SimpleKLine, Signal),
-    Error(CexError),
-}
-
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let file_appender = tracing_appender::rolling::RollingFileAppender::new(
-        tracing_appender::rolling::Rotation::DAILY,
-        "logs",
-        "bandtastic.log",
-    );
-
-    tracing_subscriber::fmt()
-        .with_writer(file_appender)
-        .with_span_events(FmtSpan::CLOSE)
-        .with_ansi(false)
-        .init();
-
-    let config = toml::from_str::<Config>(&fs::read_to_string("sub.toml")?)?;
-
-    let strategy = BandtasticStrategy::new(
-        20,  // buy_fast_ema_period
-        40,  // buy_slow_ema_period
-        50.0,  // buy_rsi_threshold
-        30.0,  // buy_mfi_threshold
-        true,  // buy_rsi_enabled
-        true,  // buy_mfi_enabled
-        true,  // buy_ema_enabled
-        "bb_lower1".to_string(),  // buy_trigger
-        7,  // sell_fast_ema_period
-        6,  // sell_slow_ema_period
-        57.0,  // sell_rsi_threshold
-        46.0,  // sell_mfi_threshold
-        false,  // sell_rsi_enabled
-        true,  // sell_mfi_enabled
-        true,  // sell_ema_enabled
-        "sell-bb_upper2".to_string(),  // sell_trigger
-    );
-
-    // 确保数据目录存在
-    let data_dir = PathBuf::from(config.output_dir);
-    fs::create_dir_all(&data_dir)?;
-
-    let boardcast = async |signal: serde_json::Value| -> anyhow::Result<()> {
-        let client = reqwest::Client::new();
-        for url in config.webhook_url.clone() {
-            let res = client.post(url.clone())
-                .json(&signal)
-                .send()
-                .await?;
-            info!("Boardcast to {}: {:?}", url, res);
-        }
-        Ok(())
-    };
-
-
-    let pair_list = config.sub_list;
-    let p_len: usize = pair_list.len();
-    let (tx, rx) = crossbeam::channel::bounded(p_len);
-    tokio::spawn(async move { subscribe_binance(pair_list, tx).await });
-
-    let (bd_tx, bd_rx) = crossbeam::channel::bounded(p_len);
-
-    // index 0 不存在, 需要多创建一个
-    let mut strategies = (0..p_len + 1).map(|_| {strategy.clone()}).collect::<Vec<BandtasticStrategy>>();
-
-
-    let st_rx = rx.clone();
-    std::thread::spawn(move || {
-        info!("开始计算策略");
-        while let Ok(msg) = st_rx.recv() {
-            match msg {
-                ChannelMsg::Kline((index, kline)) => {
-                    if let Some(signal) = strategies[index].next(kline.clone()) {
-                        bd_tx.send(BoardcastMsg::Signal(kline, signal)).unwrap();
-                    }
-                }
-                ChannelMsg::Ping(ping) => {
-                    bd_tx.send(BoardcastMsg::Ping(ping)).unwrap();
-                },
-                ChannelMsg::Error(error) => {
-                    bd_tx.send(BoardcastMsg::Error(error)).unwrap();
-                },
-            }
-        }
-    });
-
-    boardcast(json!({
-        "策略名": "Bandtastic Strategy",
-        "消息": "开始计算策略",
-        "当前时间": Utc::now().timestamp_millis(),
-    })).await?;
-
-    while let Ok(msg) = bd_rx.recv() {
-        let now_ts = Utc::now().timestamp_millis();
-        let dt = chrono::DateTime::from_timestamp_millis(now_ts)
-            .unwrap()
-            .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
-        match msg {
-            BoardcastMsg::Signal(kline, signal) => {
-                let msg = json!({
-                    "策略名": "Bandtastic Strategy",
-                    "标的名": kline.symbol,
-                    "signal": signal,
-                    "当前时间": dt.format("%Y%m%d-%H:%M.%S").to_string(),
-                });
-                info!("Signal generated: {:?}", msg);
-                if let Err(e)  = boardcast(msg).await {
-                    error!("Failed to boardcast signal: {:?}", e);
-                }
-            },
-            BoardcastMsg::Ping(ping) => {
-                let msg = json!({
-                    "策略名": "Bandtastic Strategy",
-                    "ping": ping,
-                    "当前时间": dt.format("%Y%m%d-%H:%M.%S").to_string(),
-                });
-                if let Err(e)  = boardcast(msg).await {
-                    error!("Failed to boardcast signal: {:?}", e);
-                }
-            },
-            BoardcastMsg::Error(error) => {
-                error!("Error: {:?}", error);
-            }
-        };
-    }
-
-    // 配置文件写入器
-    let writer_type = WriterType::File(FileWriterConfig {
-        base_path: data_dir,
-        rotation_interval: 8 * 3600, // 8小时轮转一次
-    });
-    
-    let writer = create_writer(writer_type)?;
-    info!("开始写入K线数据");
-    while let Ok(msg) = rx.recv() {
-        match msg {
-            ChannelMsg::Kline(kline) => {
-                writer.write(&kline).await?;
-                writer.flush().await?;
-            },
-            _ => {}
-        };
-    }
-
-    Ok(())
-} 

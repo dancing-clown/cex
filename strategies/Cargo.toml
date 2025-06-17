@@ -1,0 +1,9 @@
+[package]
+name = "strategies"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ta = "0.5.0"
+tracing = "0.1"
+cex-core = { path = "../cex-core" }

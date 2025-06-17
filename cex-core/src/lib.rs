@@ -1,8 +1,8 @@
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod writer;
+pub mod structure;
 
 #[derive(Debug, Error)]
 pub enum CexError {

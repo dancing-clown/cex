@@ -25,3 +25,4 @@ async-trait = "0.1"
 crossbeam = "0.8.4"
 toml = "0.8.22"
 ta = "0.5.0"
+strategies = { version = "0.1.0", path = "../strategies" }
