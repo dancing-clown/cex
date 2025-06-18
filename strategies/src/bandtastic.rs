@@ -14,8 +14,6 @@ use tracing::error;
 #[derive(Clone)]
 pub struct BandtasticStrategy {
     // Buy parameters
-    buy_fast_ema_period: usize,
-    buy_slow_ema_period: usize,
     buy_rsi_threshold: f64,
     buy_mfi_threshold: f64,
     buy_rsi_enabled: bool,
@@ -24,8 +22,6 @@ pub struct BandtasticStrategy {
     buy_trigger: String,
     
     // Sell parameters
-    sell_fast_ema_period: usize,
-    sell_slow_ema_period: usize,
     sell_rsi_threshold: f64,
     sell_mfi_threshold: f64,
     sell_rsi_enabled: bool,
@@ -85,16 +81,12 @@ impl BandtasticStrategy {
         let bb_period = 20;
         
         BandtasticStrategy {
-            buy_fast_ema_period,
-            buy_slow_ema_period,
             buy_rsi_threshold,
             buy_mfi_threshold,
             buy_rsi_enabled,
             buy_mfi_enabled,
             buy_ema_enabled,
             buy_trigger,
-            sell_fast_ema_period,
-            sell_slow_ema_period,
             sell_rsi_threshold,
             sell_mfi_threshold,
             sell_rsi_enabled,
@@ -277,7 +269,7 @@ impl BandtasticStrategy {
         // Generate exit signal if we have a position and sell conditions are met
         if self.position.is_some() && sell_signal {
             signal = Some(Signal::Exit {
-                reason: ExitReason::SellSignal,
+                reason: ExitReason::StopProfit,
                 price: close,
             });
         }

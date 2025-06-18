@@ -39,7 +39,7 @@ impl fmt::Debug for Direction {
 pub enum ExitReason {
     #[default]
     None,
-    SellSignal,
+    StopProfit,
     StopLoss,
     TrailingStop,
     Roi(usize, f64), // minutes, percentage
@@ -48,7 +48,7 @@ pub enum ExitReason {
 impl fmt::Debug for ExitReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ExitReason::SellSignal => write!(f, "止盈"),
+            ExitReason::StopProfit => write!(f, "止盈"),
             ExitReason::StopLoss => write!(f, "止损"),
             ExitReason::TrailingStop => write!(f, "动态止盈止损"),
             ExitReason::Roi(time, percentage) => write!(f, "投资回报率: {}分钟收益{}%", time, percentage * 100.0),
