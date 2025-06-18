@@ -72,6 +72,10 @@ impl fmt::Debug for Position {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Trade {
+    /// 交易所
+    pub exchange: String,
+    /// 交易对
+    pub symbol: String,
     pub direction: Direction,
     pub enter_position: Option<Position>,
     pub exit_position: Option<Position>,
@@ -85,6 +89,8 @@ pub struct Trade {
 impl Default for Trade {
     fn default() -> Self {
         Trade {
+            exchange: "".to_string(),
+            symbol: "".to_string(),
             direction: Direction::default(),
             enter_position: None,
             exit_position: None,
@@ -99,8 +105,8 @@ impl Default for Trade {
 
 impl fmt::Debug for Trade {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "方向: {:?}, 入场持仓: {:?}, 出场持仓: {:?}, 入场时间: {}, 退场时间: {}, 退出原因: {:?}, 回报率(百分比): {:?}",
-               self.direction, self.enter_position, self.exit_position, self.enter_time, self.exit_time, self.exit_reason, self.roi)
+        write!(f, "交易所:{}, 交易标的: {}, 方向: {:?}, 入场持仓: {:?}, 出场持仓: {:?}, 入场时间: {}, 退场时间: {}, 退出原因: {:?}, 回报率(百分比): {:?}",
+               self.exchange, self.symbol, self.direction, self.enter_position, self.exit_position, self.enter_time, self.exit_time, self.exit_reason, self.roi)
     }
 }
 

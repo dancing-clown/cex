@@ -106,6 +106,8 @@ async fn main() -> anyhow::Result<()> {
                                     error!("入场时已有持仓，该策略不支持重复入场");
                                     continue;
                                 }
+                                trades[index].exchange = kline.exchange.clone();
+                                trades[index].symbol = kline.symbol.clone();
                                 trades[index].direction = direction;
                                 trades[index].enter_position = Some(Position {
                                     price,
