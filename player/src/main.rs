@@ -4,6 +4,7 @@ use cex_core::{
     CexError, ChannelMsg, Ping, SimpleKLine
 };
 use binance::subscribe_binance;
+
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
@@ -11,7 +12,7 @@ use tracing::{error, info};
 use std::{path::PathBuf, fs};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_appender;
-use strategies::{bandtastic::BandtasticStrategy, Strategy};
+use strategies::{bandtastic::BandtasticStrategy, MultiTimeFrameMacdStrategy, Strategy};
 
 // 配置
 #[derive(Debug, Deserialize)]
@@ -33,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let file_appender = tracing_appender::rolling::RollingFileAppender::new(
         tracing_appender::rolling::Rotation::DAILY,
         "logs",
-        "bandtastic.log",
+        "strategy.log",
     );
 
     tracing_subscriber::fmt()
@@ -45,24 +46,17 @@ async fn main() -> anyhow::Result<()> {
     let config = toml::from_str::<Config>(&fs::read_to_string("sub.toml")?)?;
 
     let params = json!({
-        "buy_fast_ema_period": 20,
-        "buy_slow_ema_period": 40,
-        "buy_rsi_threshold": 50.0,
-        "buy_mfi_threshold": 30.0,
-        "buy_rsi_enabled": true,
-        "buy_mfi_enabled": true,
-        "buy_ema_enabled": true,
-        "buy_trigger": "bb_lower1",
-        "sell_fast_ema_period": 7,
-        "sell_slow_ema_period": 6,
-        "sell_rsi_threshold": 57.0,
-        "sell_mfi_threshold": 46.0,
-        "sell_rsi_enabled": false,
-        "sell_mfi_enabled": true,
-        "sell_ema_enabled": true,
-        "sell_trigger": "sell-bb_upper2",
+        "fast_length": 12,
+        "slow_length": 26,
+        "signal_length": 9,
+        "short_trend_time": "60m",
+        "long_trend_time": "240m",
+        "stop_loss_perc": 1.9,
+        "take_profit_perc": 5.4,
+        "breakeven_threshold": 1.0,
+        "trail_offset": 0.5,
     });
-    let strategy: BandtasticStrategy = serde_json::from_value(params).unwrap();
+    let strategy: MultiTimeFrameMacdStrategy = serde_json::from_value(params).unwrap();
 
     // 确保数据目录存在
     let data_dir = PathBuf::from(config.output_dir);
@@ -89,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
     let (bd_tx, bd_rx) = crossbeam::channel::bounded(p_len);
 
     // index 0 不存在, 需要多创建一个
-    let mut strategies = (0..p_len + 1).map(|_| {strategy.clone()}).collect::<Vec<BandtasticStrategy>>();
+    let mut strategies = (0..p_len + 1).map(|_| {strategy.clone()}).collect::<Vec<MultiTimeFrameMacdStrategy>>();
     let mut trades = (0..p_len + 1).map(|_| {Trade::default()}).collect::<Vec<Trade>>();
 
 

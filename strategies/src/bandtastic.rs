@@ -10,8 +10,11 @@ use cex_core::structure::Position;
 use cex_core::structure::Direction;
 use cex_core::structure::ExitReason;
 use tracing::error;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone)]
+use crate::Strategy;
+
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct BandtasticStrategy {
     // Buy parameters
     buy_rsi_threshold: f64,
@@ -38,21 +41,35 @@ pub struct BandtasticStrategy {
     trailing_only_offset_is_reached: bool,
     
     // Indicators
+    #[serde(skip)]
     rsi: RelativeStrengthIndex,
+    #[serde(skip)]
     mfi: MoneyFlowIndex,
+    #[serde(skip)]
     bb1: BollingerBands,
+    #[serde(skip)]
     bb2: BollingerBands,
+    #[serde(skip)]
     bb3: BollingerBands,
+    #[serde(skip)]
     bb4: BollingerBands,
+    #[serde(skip)]
     buy_fast_ema: ExponentialMovingAverage,
+    #[serde(skip)]
     buy_slow_ema: ExponentialMovingAverage,
+    #[serde(skip)]
     sell_fast_ema: ExponentialMovingAverage,
+    #[serde(skip)]
     sell_slow_ema: ExponentialMovingAverage,
     
     // State
+    #[serde(skip)]
     position: Option<Position>,
+    #[serde(skip)]
     bars_since_entry: usize,
+    #[serde(skip)]
     bar_index: usize,
+    #[serde(skip)]
     price_history: VecDeque<f64>,
 }
 
@@ -126,8 +143,10 @@ impl BandtasticStrategy {
             price_history: VecDeque::new(),
         }
     }
-    
-    pub fn next(&mut self, kline: SimpleKLine) -> Option<Signal> {
+}
+
+impl Strategy for BandtasticStrategy {
+    fn next(&mut self, kline: SimpleKLine) -> Option<Signal> {
         if kline.interval != "15m" {
             error!("非法的K线间隔,请检查行情输入");
             return None;

@@ -4,9 +4,12 @@ use std::collections::VecDeque;
 use cex_core::SimpleKLine;
 use cex_core::structure::{Signal, Position, Direction, ExitReason};
 use tracing::error;
+use serde::{Deserialize, Serialize};
+
+use crate::Strategy;
 
 /// Multi-timeframe MACD strategy with breakeven stop loss optimization
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct MultiTimeFrameMacdStrategy {
     short_trend_time: String,
     long_trend_time: String, // Time frame for long-term trend analysis (e.g., "240" for 4-hour)
@@ -19,14 +22,19 @@ pub struct MultiTimeFrameMacdStrategy {
     trail_offset: f64,        // Trail offset after breakeven
 
     // MACD indicators for different time frames
+    #[serde(skip)]
     macd_4h: MovingAverageConvergenceDivergence,
+    #[serde(skip)]
     macd_1h: MovingAverageConvergenceDivergence,
 
     // State variables
     position: Option<Position>,
     entry_price: Option<f64>,
+    #[serde(skip)]
     breakeven_activated: bool,
+    #[serde(skip)]
     bar_index: usize,
+    #[serde(skip)]
     price_history: VecDeque<f64>,
 }
 
@@ -62,8 +70,8 @@ impl MultiTimeFrameMacdStrategy {
     }
 }
 
-impl MultiTimeFrameMacdStrategy {
-    pub fn next(&mut self, kline: SimpleKLine) -> Option<Signal> {
+impl Strategy for MultiTimeFrameMacdStrategy {
+    fn next(&mut self, kline: SimpleKLine) -> Option<Signal> {
         // Skip if the kline interval is not supported
         if kline.interval != "60m" && kline.interval != self.long_trend_time {
             error!("Unsupported kline interval: {}, need short term: {},need long term: {}", kline.interval, self.short_trend_time, self.long_trend_time);

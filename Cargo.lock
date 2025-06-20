@@ -1162,6 +1162,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
+name = "player"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "binance",
+ "cex-core",
+ "chrono",
+ "clap",
+ "crossbeam",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "shared_memory",
+ "strategies",
+ "ta",
+ "tokio",
+ "tokio-socks",
+ "tokio-tungstenite",
+ "toml",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "zstd",
+]
+
+[[package]]
 name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1538,6 +1567,8 @@ name = "strategies"
 version = "0.1.0"
 dependencies = [
  "cex-core",
+ "serde",
+ "serde_json",
  "ta",
  "tracing",
 ]
