@@ -115,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
                                     entry_bar_index: 0,
                                     size: 1.0,
                                 });
-                                trades[index].enter_time = Utc::now().timestamp_millis();
+                                trades[index].enter_time = kline.close_time_ms as i64;
                                 bd_tx.send(BoardcastMsg::Trade(kline, trades[index].clone())).unwrap();
                             }
                             Signal::Exit { reason, price } => {
@@ -139,7 +139,7 @@ async fn main() -> anyhow::Result<()> {
                                     size: 1.0,
                                 });
                                 trades[index].exit_reason = reason;
-                                trades[index].exit_time = Utc::now().timestamp_millis();
+                                trades[index].exit_time = kline.close_time_ms as i64;
                                 trades[index].calculate();
                                 bd_tx.send(BoardcastMsg::Trade(kline, trades[index].clone())).unwrap();
                                 // 出场后重置交易信息
